@@ -33,7 +33,7 @@ import org.apache.spark.sql.internal.SQLConf
 
 import org.apache.comet.CometConf._
 import org.apache.comet.iceberg.IcebergWriteStrategy
-import org.apache.comet.rules.{CometCoalesceShufflePartitions, CometPlanAdaptiveDynamicPruningFilters, CometReuseSubquery, CometRule, CometSpark34AqeDppFallbackRule}
+import org.apache.comet.rules.{CometCoalesceShufflePartitions, CometPlanAdaptiveDynamicPruningFilters, CometPropagateEmptyRelation, CometReuseSubquery, CometRule, CometSpark34AqeDppFallbackRule}
 import org.apache.comet.shims.ShimCometSparkSessionExtensions
 
 /**
@@ -82,6 +82,10 @@ import org.apache.comet.shims.ShimCometSparkSessionExtensions
  *        b. insertTransitions
  *        c. postColumnarTransitions: RevertNativeForTransitionHeavyStages,
  *                                    EliminateRedundantTransitions, CometCacheColumnarRule
+ *
+ *   Per re-optimization after a stage materializes (AQEOptimizer, after Spark's batches):
+ *     CometPropagateEmptyRelation: treats a grouped Comet aggregate over a stage with no rows
+ *     as empty, as AQEPropagateEmptyRelation does for a Spark aggregate
  * }}}
  *
  * On Spark 3.4, injectQueryStageOptimizerRule is unavailable. CometExecRule does not wrap SABs,
@@ -112,6 +116,7 @@ class CometSparkSessionExtensions
     injectQueryStageOptimizerRuleShim(extensions, CometPlanAdaptiveDynamicPruningFilters)
     injectQueryStageOptimizerRuleShim(extensions, CometReuseSubquery)
     injectQueryStageOptimizerRuleShim(extensions, CometCoalesceShufflePartitions)
+    extensions.injectRuntimeOptimizerRule { _ => CometPropagateEmptyRelation }
     extensions.injectPlannerStrategy { session => IcebergWriteStrategy(session) }
   }
 
