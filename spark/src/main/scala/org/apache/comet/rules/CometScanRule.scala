@@ -214,6 +214,29 @@ case class CometScanRule(session: SparkSession)
     scanExec.relation match {
       case r: HadoopFsRelation =>
         if (!CometScanExec.isFileFormatSupported(r.fileFormat)) {
+          CometExternalV1ScanProvider.findForFormat(r.fileFormat) match {
+            case Some(_)
+                if plan.exists(node =>
+                  node.expressions.exists(_.exists {
+                    case _: InputFileName | _: InputFileBlockStart | _: InputFileBlockLength =>
+                      true
+                    case _ => false
+                  })) =>
+              // Same reason as the native Parquet scan: these read a thread-local that only
+              // Spark's FileScanRDD sets.
+              return withFallbackReason(
+                scanExec,
+                "External scan provider is not compatible with input_file_name, " +
+                  "input_file_block_start, or input_file_block_length")
+            case Some(provider) =>
+              return provider
+                .convert(r.sparkSession, scanExec)
+                .getOrElse(
+                  withFallbackReason(
+                    scanExec,
+                    s"External scan provider declined ${r.fileFormat}"))
+            case None =>
+          }
           return withFallbackReason(scanExec, s"Unsupported file format ${r.fileFormat}")
         }
         // NOTE: the object_store scheme gate lives in `nativeScan` (below), shared with the
