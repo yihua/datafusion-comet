@@ -732,7 +732,7 @@ case class CometExecRule(session: SparkSession, queryStagePrep: Boolean = false)
       // when the broadcast child has a Comet plan underneath. This enables exchange reuse
       // between the DPP subquery and the join's CometBroadcastExchangeExec because both
       // will have the same CometBroadcastExchangeExec type and canonical form.
-      convertSubqueryBroadcasts(converted)
+      convertSubqueryBroadcasts(convertWrappedSubqueryBroadcasts(converted))
     }
   }
 
@@ -864,6 +864,28 @@ case class CometExecRule(session: SparkSession, queryStagePrep: Boolean = false)
     plan.transformExpressionsUp { case inSub: InSubqueryExec =>
       rewriteInSubqueryPlan(inSub)
     }
+  }
+
+  /**
+   * A scan inside a `CometScanWrapper` (a scan bridged into Arrow, or a V2 scan Comet wraps) sits
+   * in `CometScanWrapper.originalPlan`, which is not a child, so its DPP subqueries are rewritten
+   * there. Left as they are, Spark's PlanAdaptiveDynamicPruningFilters finds no Spark broadcast
+   * join for the scan's SubqueryAdaptiveBroadcastExec and can replace the pruning with true, so
+   * the scan reads every partition.
+   */
+  private def convertWrappedSubqueryBroadcasts(plan: SparkPlan): SparkPlan = plan match {
+    case wrapper: CometScanWrapper =>
+      val original = wrapper.originalPlan.transformUp { case node =>
+        convertSubqueryBroadcasts(node)
+      }
+      if (original eq wrapper.originalPlan) {
+        wrapper
+      } else {
+        val rewritten = wrapper.copy(originalPlan = original)
+        rewritten.copyTagsFrom(wrapper)
+        rewritten
+      }
+    case other => other
   }
 
   private def rewriteInSubqueryPlan(inSub: InSubqueryExec): Expression = {
